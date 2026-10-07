@@ -18,6 +18,7 @@ type rows interface {
 	ColumnTypes() ([]colType, error)
 	Next() bool
 	Scan(dest ...any) error
+	Err() error
 	Close() error
 }
 
@@ -66,6 +67,10 @@ func (r rowsWrapper) Next() bool {
 
 func (r rowsWrapper) Scan(dest ...any) error {
 	return r.rows.Scan(dest...)
+}
+
+func (r rowsWrapper) Err() error {
+	return r.rows.Err()
 }
 
 func (r rowsWrapper) Close() error {

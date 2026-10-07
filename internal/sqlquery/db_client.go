@@ -58,6 +58,9 @@ func (cl DbSQLClient) QueryRows(ctx context.Context, args ...any) ([]StringMap, 
 		}
 		out = append(out, sm)
 	}
+	if err := sqlRows.Err(); err != nil {
+		return nil, err
+	}
 	return out, errors.Join(warnings...)
 }
 
