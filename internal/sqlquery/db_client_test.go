@@ -108,17 +108,52 @@ func TestDBSQLClient_Nulls_MultiRow(t *testing.T) {
 	}, rows[1])
 }
 
+func TestDBSQLClient_IterationError(t *testing.T) {
+	iterationErr := errors.New("iteration failed")
+	cl := DbSQLClient{
+		Db: fakeDB{
+			rowVals:      [][]any{{42}},
+			iterationErr: iterationErr,
+		},
+		Logger: zap.NewNop(),
+		SQL:    "",
+	}
+
+	rows, err := cl.QueryRows(t.Context())
+	require.ErrorIs(t, err, iterationErr)
+	assert.Nil(t, rows)
+}
+
+func TestDBSQLClient_IterationErrorWithNullWarning(t *testing.T) {
+	iterationErr := errors.New("iteration failed")
+	cl := DbSQLClient{
+		Db: fakeDB{
+			rowVals:      [][]any{{42, nil}},
+			iterationErr: iterationErr,
+		},
+		Logger: zap.NewNop(),
+		SQL:    "",
+	}
+
+	rows, err := cl.QueryRows(t.Context())
+	require.ErrorIs(t, err, iterationErr)
+	assert.NotErrorIs(t, err, ErrNullValueWarning)
+	assert.Nil(t, rows)
+}
+
 type fakeDB struct {
-	rowVals [][]any
+	rowVals      [][]any
+	iterationErr error
 }
 
 func (db fakeDB) QueryContext(context.Context, string, ...any) (rows, error) {
-	return &fakeRows{vals: db.rowVals}, nil
+	return &fakeRows{vals: db.rowVals, iterationErr: db.iterationErr}, nil
 }
 
 type fakeRows struct {
-	vals [][]any
-	row  int
+	vals         [][]any
+	row          int
+	iterationErr error
 }
 
 func (r *fakeRows) ColumnTypes() ([]colType, error) {
@@ -140,6 +175,10 @@ func (r *fakeRows) Scan(dest ...any) error {
 	}
 	r.row++
 	return nil
+}
+
+func (r *fakeRows) Err() error {
+	return r.iterationErr
 }
 
 func (*fakeRows) Close() error {
