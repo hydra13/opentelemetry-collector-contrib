@@ -1,0 +1,11 @@
+change_type: bug_fix
+
+component: exporter/azuredataexplorer
+
+note: Propagate the export context to Azure Data Explorer ingestion so configured timeouts and cancellation take effect.
+
+issues: [51872]
+
+subtext:
+
+change_logs: [user]

@@ -175,6 +175,87 @@ func TestIngestedDataRecordCount(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestDataPushersPropagateContext(t *testing.T) {
+	tests := []struct {
+		name string
+		push func(context.Context, *adxDataProducer) error
+	}{
+		{
+			name: "metrics",
+			push: func(ctx context.Context, producer *adxDataProducer) error {
+				return producer.metricsDataPusher(ctx, createMetricsData(1))
+			},
+		},
+		{
+			name: "logs",
+			push: func(ctx context.Context, producer *adxDataProducer) error {
+				return producer.logsDataPusher(ctx, createLogsData())
+			},
+		},
+		{
+			name: "traces",
+			push: func(ctx context.Context, producer *adxDataProducer) error {
+				return producer.tracesDataPusher(ctx, createTracesData())
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Run("value", func(t *testing.T) {
+				type contextKey struct{}
+				const contextValue = "expected-value"
+				ctx := context.WithValue(t.Context(), contextKey{}, contextValue)
+				ingestor := &mockingestor{}
+				producer := &adxDataProducer{
+					ingestor: ingestor,
+					logger:   zaptest.NewLogger(t),
+				}
+
+				require.NoError(t, tt.push(ctx, producer))
+				require.NotNil(t, ingestor.receivedCtx)
+				assert.Same(t, ctx, ingestor.receivedCtx)
+				assert.Equal(t, contextValue, ingestor.receivedCtx.Value(contextKey{}))
+				_, hasDeadline := ingestor.receivedCtx.Deadline()
+				assert.False(t, hasDeadline)
+			})
+
+			t.Run("deadline", func(t *testing.T) {
+				deadline := time.Now().Add(time.Hour)
+				ctx, cancel := context.WithDeadline(t.Context(), deadline)
+				defer cancel()
+				ingestor := &mockingestor{}
+				producer := &adxDataProducer{
+					ingestor: ingestor,
+					logger:   zaptest.NewLogger(t),
+				}
+
+				require.NoError(t, tt.push(ctx, producer))
+				require.NotNil(t, ingestor.receivedCtx)
+				receivedDeadline, hasDeadline := ingestor.receivedCtx.Deadline()
+				require.True(t, hasDeadline)
+				assert.True(t, receivedDeadline.Equal(deadline))
+			})
+
+			t.Run("cancellation", func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				cancel()
+				ingestor := &mockingestor{
+					fromReaderFn: func(ctx context.Context) error {
+						return ctx.Err()
+					},
+				}
+				producer := &adxDataProducer{
+					ingestor: ingestor,
+					logger:   zaptest.NewLogger(t),
+				}
+
+				require.ErrorIs(t, tt.push(ctx, producer), context.Canceled)
+			})
+		})
+	}
+}
+
 func TestCreateKcsb(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -248,10 +329,18 @@ func TestCreateKcsb(t *testing.T) {
 }
 
 type mockingestor struct {
-	records []string
+	records      []string
+	receivedCtx  context.Context
+	fromReaderFn func(context.Context) error
 }
 
-func (m *mockingestor) FromReader(_ context.Context, reader io.Reader, _ ...azkustoingest.FileOption) (*azkustoingest.Result, error) {
+func (m *mockingestor) FromReader(ctx context.Context, reader io.Reader, _ ...azkustoingest.FileOption) (*azkustoingest.Result, error) {
+	m.receivedCtx = ctx
+	if m.fromReaderFn != nil {
+		if err := m.fromReaderFn(ctx); err != nil {
+			return nil, err
+		}
+	}
 	bufbytes, _ := io.ReadAll(reader)
 	metricjson := string(bufbytes)
 	m.SetRecords(strings.Split(metricjson, "\n"))
